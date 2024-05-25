@@ -1,0 +1,397 @@
+<!--
+    Inter-stage variables come into play between a vertex shader and a fragment shader.
+
+    When a vertex shader outputs 3 positions a triangle gets rasterized. 
+    The vertex shader can output extra values at each of those positions and by default, 
+    those values will be interpolated between the 3 points.
+-->
+
+<canvas width="600" height="600"></canvas>
+<!-- 
+    If we set width and hight on canvas element (canvas’s drawing buffer) and width and height in CSS (canvas’s display size),
+    the display size will be the same size as its drawing buffer, so we dont have to have helper functions for resizing canvas in JS.
+    The browser takes our canvas’s drawing buffer size and stretches it to canvas’s display size.
+-->
+<style>
+body {
+    background-color: wheat;
+}
+canvas {
+    display: block;  /* make the canvas act like a block   */
+    width: 600px;
+    height: 600px;
+    border: 2px solid black;
+    background-color: white;
+    margin: auto; /* center horizontally */
+}
+</style>
+<script type="module">
+    // WebGPU is an asynchronous API (JS doesn't wait for main to finish executing, but continues)
+    async function start() {
+        if (!navigator.gpu) {
+            fail('this browser does not support WebGPU');
+            return;
+        }
+
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+            fail('this browser supports webgpu but it appears disabled');
+            return;
+        }
+
+        const device = await adapter?.requestDevice();
+        device.lost.then((info) => {
+            console.error(`WebGPU device was lost: ${info.message}`);
+
+            // 'reason' will be 'destroyed' if we intentionally destroy the device.
+            if (info.reason !== 'destroyed') {
+            // try again
+            start();
+            }
+        });
+        
+        main(device);
+    }
+    // We use await before function to wait for function to complete
+    // await start();
+    start();
+
+
+    function main(device) {
+        /*  
+            "?." => optional chaning operator 
+            "?." operator accesses an object's property or calls a function. 
+            If the object accessed or function called using this operator is undefined or null, 
+            the expression short circuits and evaluates to undefined instead of throwing an error.
+
+            If the navigaor.gpu does not exist, adapter becomes undefined. Adapter represents a specific GPU.
+            Some systems have multiple GPUs
+
+            If the adapter is undefined, then by using adapter?, the device will also be undefined.
+
+            Both functions are async, so we need to use await.
+        */
+        /*
+        const adapter = await navigator.gpu?.requestAdapter();
+        const device = await adapter?.requestDevice();
+        if (!device) {
+            fail('This browser does not support WebGPU');
+            return;
+        }
+        */
+        /*
+        if (!navigator.gpu) {
+            fail("WebGPU not supported.");
+            return;
+        }
+        const adapter = await navigator.gpu.requestAdapter({
+            powerPreference: 'high-performance'
+        });
+        if (!adapter) {
+            fail("Couldn't request WebGPU adapter.");
+            return;
+        }
+        const device = await adapter.requestDevice();
+        */
+
+        /*
+            Look up the canvas and create a webgpu context for it. 
+            This will let us get a texture to render to. 
+            That texture will be used to display the canvas in the webpage.
+
+            Prefered canvas format is eiter rgba8unorm or bgra8unorm.
+        */
+        // Get a WebGPU context from the canvas and configure it
+        const canvas = document.querySelector('canvas');
+        const context = canvas.getContext('webgpu');
+        const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+        context.configure({
+            device,
+            format: presentationFormat,
+        });
+
+        /*
+            Create a shader module. 
+            A shader module contains one or more shader functions. 
+            In our case, we’ll make 1 vertex shader function and 1 fragment shader function.
+
+            // We can also seperate modules for compute/vertex/fragment shaders
+        */
+        const module = device.createShaderModule({
+            label: 'our hardcoded rgb triangle shaders',
+            code: `
+
+            // Different interpolation methods (Interpolation type: perspective (default), linear, flat (not interpolated), Interpolation sampling: center (default), centroid, sample)
+            // if the inter-stage variable is an integer type then you must set its interpolation to flat
+            // If you set the interpolation type to flat, the value passed to the fragment shader is the value of the inter-stage variable for the first vertex in that triangle
+            /*
+            @location(2) @interpolate(linear, center) myVariableFoo: vec4f;
+            @location(3) @interpolate(flat) myVariableBar: vec4f;
+            */
+        
+            // struct
+            /*
+                @builtin(position):         final position of a vertex, which the vertex shader writes to (in clip space)
+
+                Easy way to coordinate the inter-stage variables between a vertex shader and a fragment shader.
+                @builtin(position) is not inter-stage variable. (doesn't have the location).
+                In a vertex shader @builtin(position) is the output that the GPU needs to draw triangles/lines/points (check fragment shader desc, for what @builtin(position) means there)
+            */
+            /*
+            struct OurVertexShaderOutput {
+                @builtin(position) position: vec4f,
+                @location(0) color: vec4f,
+            };
+            */
+            struct OurVertexShaderOutput {
+                @builtin(position) position: vec4f,
+            };
+        
+            // vertex shader
+            /*
+                @vertex:                    vertex shader
+                fn:                         function
+                vs:                         name of function
+                @builtin:                   special built-in values that are provided by the WebGPU runtime
+                @builtin(vertex_index):     index of the vertex within the vertex buffer (like index in JavaScript's Array.map(function(value, index) { ... }))
+                vertexIndex:                parameter (gets value from @builtin(vertex_index))
+                u32:                        32-bit unsigned integer (vertexIndex is u32)
+                ->:                         returns
+                OurVertexShaderOutput:      returns a variable of type OurVertexShaderOutput struct 
+
+                In “triangle-list” mode, every 3 times the vertex shader is executed a triangle will be drawn connecting the 3 position values we return
+                Clip space => X goes from -1.0 left to 1.0 right, Y goes from -1.0 bottom to 1.0 top
+            */
+            /*
+            @vertex fn vs(@builtin(vertex_index) vertexIndex : u32) -> OurVertexShaderOutput {
+                let pos = array(
+                    vec2f( 0.0,  0.5),  // top center
+                    vec2f(-0.5, -0.5),  // bottom left
+                    vec2f( 0.5, -0.5)   // bottom right
+                );
+                var color = array<vec4f, 3>(
+                    vec4f(1, 0, 0, 1), // red
+                    vec4f(0, 1, 0, 1), // green
+                    vec4f(0, 0, 1, 1), // blue
+                );
+        
+                // Declare instance of struct OurVertexShaderOutput and fill with data then return
+                var vsOutput: OurVertexShaderOutput;
+                vsOutput.position = vec4f(pos[vertexIndex], 0.0, 1.0);
+                vsOutput.color = color[vertexIndex];
+                return vsOutput;
+            }
+            */
+            @vertex fn vs(@builtin(vertex_index) vertexIndex : u32) -> OurVertexShaderOutput {
+                let pos = array(
+                    vec2f( 0.0,  0.5),  // top center
+                    vec2f(-0.5, -0.5),  // bottom left
+                    vec2f( 0.5, -0.5)   // bottom right
+                );
+        
+                var vsOutput: OurVertexShaderOutput;
+                vsOutput.position = vec4f(pos[vertexIndex], 0.0, 1.0);
+                return vsOutput;
+            }
+            
+            // fragment shader
+            /*
+                @fragment:      fragment shader
+                fsInput: OurVertexShaderOutput: one input parameter of function of type OurVertexShaderOutput
+                @location(0):   returns a vec4f at location(0) (writes to the first render target)
+
+                The connection between the vertex shader and the fragment shader is by index. 
+                For inter-stage variables, they connect by location index, so we can also do this:
+                @fragment fn fs(@location(0) color: vec4f) -> @location(0) vec4f {
+                    return color;
+                }
+                because in struct, we define the color to be at location 0 => @location(0) color: vec4f
+
+                In a fragment shader, @builtin(position) is an input. 
+                It's the pixel coordinate of the pixel that the fragment shader is currently being asked to compute a color for.
+                But we can still use position of vertex, if we send a struct to fragment shader
+
+                Returns RGBA (vec4f) color (from 0.0 to 1.0 per component)
+                Rasterizes the triangle = draws it with pixels
+
+                Pixel coordinates are specified by the edges of pixels. 
+                The values provided to the fragment shader are the coordinates of the center of the pixel
+                (0.5, 0.5) is the first pixel
+
+                In the second fragment shader:
+                Takes the x and y coords from position sent by vertex shader and puts them in vec2u (unsigned int)
+                Select function takes two values and selects one the other based on boolean condition
+            */
+            /*
+            @fragment fn fs(fsInput: OurVertexShaderOutput) -> @location(0) vec4f {
+                return fsInput.color;
+            }
+            */
+            @fragment fn fs(fsInput: OurVertexShaderOutput) -> @location(0) vec4f {
+                let red = vec4f(1, 0, 0, 1);
+                let cyan = vec4f(0, 1, 1, 1);
+        
+                let grid = vec2u(fsInput.position.xy) / 8;
+                let checker = (grid.x + grid.y) % 2 == 1;
+        
+                return select(red, cyan, checker);
+            }
+            `,
+        });
+        
+        const vsModule = device.createShaderModule({
+            label: 'hardcoded triangle',
+            code: `
+            struct OurVertexShaderOutput {
+                @builtin(position) position: vec4f,
+            };
+
+            @vertex fn vs(
+                @builtin(vertex_index) vertexIndex : u32
+            ) -> OurVertexShaderOutput {
+                let pos = array(
+                vec2f( 0.0,  0.5),  // top center
+                vec2f(-0.5, -0.5),  // bottom left
+                vec2f( 0.5, -0.5)   // bottom right
+                );
+
+                var vsOutput: OurVertexShaderOutput;
+                vsOutput.position = vec4f(pos[vertexIndex], 0.0, 1.0);
+                return vsOutput;
+            }
+            `,
+        });
+
+        const fsModule = device.createShaderModule({
+            label: 'checkerboard',
+            code: `
+            @fragment fn fs(@builtin(position) pixelPosition: vec4f) -> @location(0) vec4f {
+                let red = vec4f(1, 0, 0, 1);
+                let cyan = vec4f(0, 1, 1, 1);
+
+                let grid = vec2u(pixelPosition.xy) / 8;
+                let checker = (grid.x + grid.y) % 2 == 1;
+
+                return select(red, cyan, checker);
+            }
+            `,
+        });
+
+        /*
+            Render pipeline
+            layout:auto => ask WebGPU to derive the layout of data from the shaders
+            Labels are important!
+            vertex => vertex shader (uses "vs" as function for vertex shader from our shader module "vsModule")
+            fragment => fragment shader (uses "fs" as function for fragment shader from our shader module "fsModule")
+            If there is only one function for vertex shader and one for fragment shader, we dont need to specify "entryPoint"
+        */
+        // Create render pipeline
+        const pipeline = device.createRenderPipeline({
+            label: 'our hardcoded red triangle pipeline',
+            layout: 'auto',
+            vertex: {
+                entryPoint: 'vs',
+                module: vsModule,
+            },
+            fragment: {
+                entryPoint: 'fs',
+                module: fsModule,
+                targets: [{ format: presentationFormat }],
+            },
+        });
+
+        /*
+            GPURenderPassDescriptor
+            Describes which textures we want to draw to and how to use them
+            colorAttachments => lists the textures we will render to and how to treat them
+            clearValue => with which color to clear the canvas/texture
+            loadOp: 'clear' => specifies to clear the texture to the clear value before drawing
+            loadOp: 'load' => load the existing contents of the texture into the GPU so we can draw over what’s already there 
+            storeOp: 'store' => store the result of what we draw
+            storeOp: 'discard' => throw away what we draw
+
+            Element 0 of the colorAttachments array corresponds to @location(0) as we specified for the return value of the fragment shader
+        */
+        // Prepare GPURenderPassDescriptor
+        const renderPassDescriptor = {
+            label: 'our basic canvas renderPass',
+            colorAttachments: [
+            {
+                // view: <- to be filled out when we render
+                clearValue: [0.3, 0.3, 0.3, 1],
+                loadOp: 'clear',
+                storeOp: 'store',
+            },
+            ],
+        };  
+
+        const canvasToSizeMap = new WeakMap();
+
+        function resizeCanvasToDisplaySize(canvas) {
+            // Get the canvas's current display size
+            let { width, height } = canvasToSizeMap.get(canvas) || canvas;
+
+            // Make sure it's valid for WebGPU
+            width = Math.max(1, Math.min(width, device.limits.maxTextureDimension2D));
+            height = Math.max(1, Math.min(height, device.limits.maxTextureDimension2D));
+
+            // Only if the size is different, set the canvas size
+            const needResize = canvas.width !== width || canvas.height !== height;
+            if (needResize) {
+                canvas.width = width;
+                canvas.height = height;
+            }
+            return needResize;
+        }
+
+        // Render
+        function render() {
+            resizeCanvasToDisplaySize(canvas);
+
+            // Get the current texture from the canvas context and set it as the texture to render to.
+            renderPassDescriptor.colorAttachments[0].view = context.getCurrentTexture().createView();
+        
+            // make a command encoder to start encoding commands
+            const encoder = device.createCommandEncoder({ label: 'our encoder' });
+        
+            // make a render pass encoder to encode render specific commands
+            const pass = encoder.beginRenderPass(renderPassDescriptor);
+            pass.setPipeline(pipeline);
+            pass.draw(3);  // call our vertex shader 3 times
+            pass.end();
+        
+            const commandBuffer = encoder.finish();
+            device.queue.submit([commandBuffer]);
+        }
+    
+        /*
+            <canvas> tags, by default, have a resolution of 300x150 pixels. 
+            We’d like to adjust the resolution of the canvas to match the size it is displayed.
+            create a ResizeObserver and give it a function to call whenever the elements you’ve asked it to observe change their size. 
+            You then tell it which elements to observe.
+
+            We go through all entries, but it should only be one => our one canvas. 
+            We need to limit the size of the canvas to the largest size our device supports otherwise WebGPU will start generating errors that we tried to make a texture that is too large. 
+            We also need to make sure it doesn’t go to zero or again we’ll get errors.
+            
+            We call render to re-render the triangle at the new resolution.
+
+            The new size texture is created when we call context.getCurrentTexture() inside render
+        */
+        const observer = new ResizeObserver(entries => {
+            for (const entry of entries) {
+                canvasToSizeMap.set(entry.target, {
+                    width: entry.contentBoxSize[0].inlineSize,
+                    height: entry.contentBoxSize[0].blockSize,
+                });
+            }
+            render();
+        });
+        observer.observe(canvas);
+    }
+
+    function fail(msg) {
+    // eslint-disable-next-line no-alert
+        alert(msg);
+    }
+</script>

@@ -1,0 +1,270 @@
+<canvas width="600" height="600"></canvas>
+<!-- 
+    If we set width and hight on canvas element (canvas’s drawing buffer) and width and height in CSS (canvas’s display size),
+    the display size will be the same size as its drawing buffer, so we dont have to have helper functions for resizing canvas in JS.
+    The browser takes our canvas’s drawing buffer size and stretches it to canvas’s display size.
+-->
+<style>
+body {
+    background-color: wheat;
+}
+canvas {
+    display: block;  /* make the canvas act like a block   */
+    width: 600px;
+    height: 600px;
+    border: 2px solid black;
+    background-color: white;
+    margin: auto; /* center horizontally */
+}
+</style>
+<script type="module">
+    // WebGPU is an asynchronous API (JS doesn't wait for main to finish executing, but continues)
+    async function start() {
+        if (!navigator.gpu) {
+            fail('this browser does not support WebGPU');
+            return;
+        }
+
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+            fail('this browser supports webgpu but it appears disabled');
+            return;
+        }
+
+        const device = await adapter?.requestDevice();
+        device.lost.then((info) => {
+            console.error(`WebGPU device was lost: ${info.message}`);
+
+            // 'reason' will be 'destroyed' if we intentionally destroy the device.
+            if (info.reason !== 'destroyed') {
+            // try again
+            start();
+            }
+        });
+        
+        main(device);
+    }
+    // We use await before function to wait for function to complete
+    // await start();
+    start();
+
+
+    function main(device) {
+        /*  
+            "?." => optional chaning operator 
+            "?." operator accesses an object's property or calls a function. 
+            If the object accessed or function called using this operator is undefined or null, 
+            the expression short circuits and evaluates to undefined instead of throwing an error.
+
+            If the navigaor.gpu does not exist, adapter becomes undefined. Adapter represents a specific GPU.
+            Some systems have multiple GPUs
+
+            If the adapter is undefined, then by using adapter?, the device will also be undefined.
+
+            Both functions are async, so we need to use await.
+        */
+        /*
+        const adapter = await navigator.gpu?.requestAdapter();
+        const device = await adapter?.requestDevice();
+        if (!device) {
+            fail('This browser does not support WebGPU');
+            return;
+        }
+        */
+        /*
+        if (!navigator.gpu) {
+            fail("WebGPU not supported.");
+            return;
+        }
+        const adapter = await navigator.gpu.requestAdapter({
+            powerPreference: 'high-performance'
+        });
+        if (!adapter) {
+            fail("Couldn't request WebGPU adapter.");
+            return;
+        }
+        const device = await adapter.requestDevice();
+        */
+
+        /*
+            Look up the canvas and create a webgpu context for it. 
+            This will let us get a texture to render to. 
+            That texture will be used to display the canvas in the webpage.
+
+            Prefered canvas format is eiter rgba8unorm or bgra8unorm.
+        */
+        // Get a WebGPU context from the canvas and configure it
+        const canvas = document.querySelector('canvas');
+        const context = canvas.getContext('webgpu');
+        const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+        context.configure({
+            device,
+            format: presentationFormat,
+        });
+
+        /*
+            Create a shader module. 
+            A shader module contains one or more shader functions. 
+            In our case, we’ll make 1 vertex shader function and 1 fragment shader function.
+        */
+        const module = device.createShaderModule({
+            label: 'our hardcoded red triangle shaders',
+            code: `
+            // vertex shader
+            /*
+                @vertex:                    vertex shader
+                fn:                         function
+                vs:                         name of function
+                @builtin:                   special built-in values that are provided by the WebGPU runtime
+                @builtin(vertex_index):     index of the vertex within the vertex buffer (like index in JavaScript's Array.map(function(value, index) { ... }))
+                vertexIndex:                parameter (gets value from @builtin(vertex_index))
+                u32:                        32-bit unsigned integer (vertexIndex is u32)
+                ->:                         returns
+                @builtin(position):         final position of a vertex, which the vertex shader writes to (in clip space)
+                vec4f:                      a 4D vector of 32bit floating point values ({x: 0, y: 0, z: 0, w: 0}) (returns a position of vec4f type)
+
+                In “triangle-list” mode, every 3 times the vertex shader is executed a triangle will be drawn connecting the 3 position values we return
+                Clip space => X goes from -1.0 left to 1.0 right, Y goes from -1.0 bottom to 1.0 top
+            */
+            @vertex fn vs(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
+                let pos = array(
+                    vec2f( 0.0,  0.5),  // top center
+                    vec2f(-0.5, -0.5),  // bottom left
+                    vec2f( 0.5, -0.5)   // bottom right
+                );
+        
+                return vec4f(pos[vertexIndex], 0.0, 1.0);
+            }
+        
+            // fragment shader
+            /*
+                @fragment:      fragment shader
+                @location(0):   returns a vec4f at location(0) (writes to the first render target)
+
+                Returns RGBA (vec4f) color (from 0.0 to 1.0 per component)
+                Rasterizes the triangle = draws it with pixels
+            */
+            @fragment fn fs() -> @location(0) vec4f {
+                return vec4f(1.0, 0.0, 0.0, 1.0);
+            }
+            `,
+        });
+
+        /*
+            Render pipeline
+            layout:auto => ask WebGPU to derive the layout of data from the shaders
+            Labels are important!
+            vertex => vertex shader (uses "vs" as function for vertex shader from our shader module "module")
+            fragment => fragment shader (uses "fs" as function for fragment shader from our shader module "module")
+            If there is only one function for vertex shader and one for fragment shader, we dont need to specify "entryPoint"
+        */
+        // Create render pipeline
+        const pipeline = device.createRenderPipeline({
+            label: 'our hardcoded red triangle pipeline',
+            layout: 'auto',
+            vertex: {
+                entryPoint: 'vs',
+                module,
+            },
+            fragment: {
+                entryPoint: 'fs',
+                module,
+                targets: [{ format: presentationFormat }],
+            },
+        });
+
+        /*
+            GPURenderPassDescriptor
+            Describes which textures we want to draw to and how to use them
+            colorAttachments => lists the textures we will render to and how to treat them
+            clearValue => with which color to clear the canvas/texture
+            loadOp: 'clear' => specifies to clear the texture to the clear value before drawing
+            loadOp: 'load' => load the existing contents of the texture into the GPU so we can draw over what’s already there 
+            storeOp: 'store' => store the result of what we draw
+            storeOp: 'discard' => throw away what we draw
+
+            Element 0 of the colorAttachments array corresponds to @location(0) as we specified for the return value of the fragment shader
+        */
+        // Prepare GPURenderPassDescriptor
+        const renderPassDescriptor = {
+            label: 'our basic canvas renderPass',
+            colorAttachments: [
+            {
+                // view: <- to be filled out when we render
+                clearValue: [0.3, 0.3, 0.3, 1],
+                loadOp: 'clear',
+                storeOp: 'store',
+            },
+            ],
+        };  
+
+        const canvasToSizeMap = new WeakMap();
+
+        function resizeCanvasToDisplaySize(canvas) {
+            // Get the canvas's current display size
+            let { width, height } = canvasToSizeMap.get(canvas) || canvas;
+
+            // Make sure it's valid for WebGPU
+            width = Math.max(1, Math.min(width, device.limits.maxTextureDimension2D));
+            height = Math.max(1, Math.min(height, device.limits.maxTextureDimension2D));
+
+            // Only if the size is different, set the canvas size
+            const needResize = canvas.width !== width || canvas.height !== height;
+            if (needResize) {
+                canvas.width = width;
+                canvas.height = height;
+            }
+            return needResize;
+        }
+
+        // Render
+        function render() {
+            resizeCanvasToDisplaySize(canvas);
+
+            // Get the current texture from the canvas context and set it as the texture to render to.
+            renderPassDescriptor.colorAttachments[0].view = context.getCurrentTexture().createView();
+        
+            // make a command encoder to start encoding commands
+            const encoder = device.createCommandEncoder({ label: 'our encoder' });
+        
+            // make a render pass encoder to encode render specific commands
+            const pass = encoder.beginRenderPass(renderPassDescriptor);
+            pass.setPipeline(pipeline);
+            pass.draw(3);  // call our vertex shader 3 times
+            pass.end();
+        
+            const commandBuffer = encoder.finish();
+            device.queue.submit([commandBuffer]);
+        }
+    
+        /*
+            <canvas> tags, by default, have a resolution of 300x150 pixels. 
+            We’d like to adjust the resolution of the canvas to match the size it is displayed.
+            create a ResizeObserver and give it a function to call whenever the elements you’ve asked it to observe change their size. 
+            You then tell it which elements to observe.
+
+            We go through all entries, but it should only be one => our one canvas. 
+            We need to limit the size of the canvas to the largest size our device supports otherwise WebGPU will start generating errors that we tried to make a texture that is too large. 
+            We also need to make sure it doesn’t go to zero or again we’ll get errors.
+            
+            We call render to re-render the triangle at the new resolution.
+
+            The new size texture is created when we call context.getCurrentTexture() inside render
+        */
+        const observer = new ResizeObserver(entries => {
+            for (const entry of entries) {
+                canvasToSizeMap.set(entry.target, {
+                    width: entry.contentBoxSize[0].inlineSize,
+                    height: entry.contentBoxSize[0].blockSize,
+                });
+            }
+            render();
+        });
+        observer.observe(canvas);
+    }
+
+    function fail(msg) {
+    // eslint-disable-next-line no-alert
+        alert(msg);
+    }
+</script>

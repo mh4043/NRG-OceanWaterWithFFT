@@ -1,0 +1,463 @@
+<!--
+    Uniforms are kind of like global variables for your shader.
+    You can set their values before you execute the shader and they’ll have those values for every iteration of the shader. 
+    You can set them to something else the next time you ask the GPU to execute the shader.
+-->
+<canvas width="600" height="600"></canvas>
+<!-- 
+    If we set width and hight on canvas element (canvas’s drawing buffer) and width and height in CSS (canvas’s display size),
+    the display size will be the same size as its drawing buffer, so we dont have to have helper functions for resizing canvas in JS.
+    The browser takes our canvas’s drawing buffer size and stretches it to canvas’s display size.
+-->
+<style>
+body {
+    background-color: wheat;
+}
+canvas {
+    display: block;  /* make the canvas act like a block   */
+    width: 600px;
+    height: 600px;
+    border: 2px solid black;
+    background-color: white;
+    margin: auto; /* center horizontally */
+}
+</style>
+<script type="module">
+    // WebGPU is an asynchronous API (JS doesn't wait for main to finish executing, but continues)
+    async function start() {
+        if (!navigator.gpu) {
+            fail('this browser does not support WebGPU');
+            return;
+        }
+
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+            fail('this browser supports webgpu but it appears disabled');
+            return;
+        }
+
+        const device = await adapter?.requestDevice();
+        device.lost.then((info) => {
+            console.error(`WebGPU device was lost: ${info.message}`);
+
+            // 'reason' will be 'destroyed' if we intentionally destroy the device.
+            if (info.reason !== 'destroyed') {
+            // try again
+            start();
+            }
+        });
+        
+        main(device);
+    }
+    // We use await before function to wait for function to complete
+    // await start();
+    start();
+
+    // A random number between [min and max)
+    // With 1 argument it will be [0 to min)
+    // With no arguments it will be [0 to 1)
+    const rand = (min, max) => {
+        if (min === undefined) {
+            min = 0;
+            max = 1;
+        } else if (max === undefined) {
+            max = min;
+            min = 0;
+        }
+        return min + Math.random() * (max - min);
+    };
+
+    function main(device) {
+        /*  
+            "?." => optional chaning operator 
+            "?." operator accesses an object's property or calls a function. 
+            If the object accessed or function called using this operator is undefined or null, 
+            the expression short circuits and evaluates to undefined instead of throwing an error.
+
+            If the navigaor.gpu does not exist, adapter becomes undefined. Adapter represents a specific GPU.
+            Some systems have multiple GPUs
+
+            If the adapter is undefined, then by using adapter?, the device will also be undefined.
+
+            Both functions are async, so we need to use await.
+        */
+        /*
+        const adapter = await navigator.gpu?.requestAdapter();
+        const device = await adapter?.requestDevice();
+        if (!device) {
+            fail('This browser does not support WebGPU');
+            return;
+        }
+        */
+        /*
+        if (!navigator.gpu) {
+            fail("WebGPU not supported.");
+            return;
+        }
+        const adapter = await navigator.gpu.requestAdapter({
+            powerPreference: 'high-performance'
+        });
+        if (!adapter) {
+            fail("Couldn't request WebGPU adapter.");
+            return;
+        }
+        const device = await adapter.requestDevice();
+        */
+
+        /*
+            Look up the canvas and create a webgpu context for it. 
+            This will let us get a texture to render to. 
+            That texture will be used to display the canvas in the webpage.
+
+            Prefered canvas format is eiter rgba8unorm or bgra8unorm.
+        */
+        // Get a WebGPU context from the canvas and configure it
+        const canvas = document.querySelector('canvas');
+        const context = canvas.getContext('webgpu');
+        const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+        context.configure({
+            device,
+            format: presentationFormat,
+        });
+
+        /*
+            Create a shader module. 
+            A shader module contains one or more shader functions. 
+            In our case, we’ll make 1 vertex shader function and 1 fragment shader function.
+        */
+        const module = device.createShaderModule({
+            label: 'our hardcoded red triangle shaders',
+            code: `
+            // Define struct
+            /*
+            struct OurStruct {
+                color: vec4f,
+                scale: vec2f,
+                offset: vec2f,
+            };
+            */
+            struct OurStruct {
+                color: vec4f,
+                offset: vec2f,
+            };
+            struct OtherStruct {
+                scale: vec2f,
+            };
+        
+            // Define a uniform variable outStruct of type OurStructs
+            @group(0) @binding(0) var<uniform> ourStruct: OurStruct;
+            @group(0) @binding(1) var<uniform> otherStruct: OtherStruct;
+
+            // vertex shader
+            /*
+                @vertex:                    vertex shader
+                fn:                         function
+                vs:                         name of function
+                @builtin:                   special built-in values that are provided by the WebGPU runtime
+                @builtin(vertex_index):     index of the vertex within the vertex buffer (like index in JavaScript's Array.map(function(value, index) { ... }))
+                vertexIndex:                parameter (gets value from @builtin(vertex_index))
+                u32:                        32-bit unsigned integer (vertexIndex is u32)
+                ->:                         returns
+                @builtin(position):         final position of a vertex, which the vertex shader writes to (in clip space)
+                vec4f:                      a 4D vector of 32bit floating point values ({x: 0, y: 0, z: 0, w: 0}) (returns a position of vec4f type)
+
+                In “triangle-list” mode, every 3 times the vertex shader is executed a triangle will be drawn connecting the 3 position values we return
+                Clip space => X goes from -1.0 left to 1.0 right, Y goes from -1.0 bottom to 1.0 top
+            */
+            @vertex fn vs(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
+                let pos = array(
+                    vec2f( 0.0,  0.5),  // top center
+                    vec2f(-0.5, -0.5),  // bottom left
+                    vec2f( 0.5, -0.5)   // bottom right
+                );
+        
+                //return vec4f(pos[vertexIndex] * ourStruct.scale + ourStruct.offset, 0.0, 1.0);
+                return vec4f(pos[vertexIndex] * otherStruct.scale + ourStruct.offset, 0.0, 1.0);
+            }
+        
+            // fragment shader
+            /*
+                @fragment:      fragment shader
+                @location(0):   returns a vec4f at location(0) (writes to the first render target)
+
+                Returns RGBA (vec4f) color (from 0.0 to 1.0 per component)
+                Rasterizes the triangle = draws it with pixels
+            */
+            @fragment fn fs() -> @location(0) vec4f {
+                return ourStruct.color;
+            }
+            `,
+        });
+
+        /*
+            Render pipeline
+            layout:auto => ask WebGPU to derive the layout of data from the shaders
+            Labels are important!
+            vertex => vertex shader (uses "vs" as function for vertex shader from our shader module "module")
+            fragment => fragment shader (uses "fs" as function for fragment shader from our shader module "module")
+            If there is only one function for vertex shader and one for fragment shader, we dont need to specify "entryPoint"
+        */
+        // Create render pipeline
+        const pipeline = device.createRenderPipeline({
+            label: 'our hardcoded red triangle pipeline',
+            layout: 'auto',
+            vertex: {
+                entryPoint: 'vs',
+                module,
+            },
+            fragment: {
+                entryPoint: 'fs',
+                module,
+                targets: [{ format: presentationFormat }],
+            },
+        });
+
+        // Fill out a buffer with data that matches the struct in our shader.
+        /*
+            GPUBufferUsage.UNIFORM => can be used with uniforms
+            GPUBufferUsage.COPY_DST => can update by copying data to it
+        */
+        
+        /*
+        const uniformBufferSize =
+            4 * 4 + // color is 4 32bit floats (4bytes each)
+            2 * 4 + // scale is 2 32bit floats (4bytes each)
+            2 * 4;  // offset is 2 32bit floats (4bytes each)
+        */
+        /*
+        const uniformBuffer = device.createBuffer({
+            size: uniformBufferSize,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        */
+
+        // Create a typedarray to hold the values for the uniforms in JavaScript
+        //const uniformValues = new Float32Array(uniformBufferSize / 4);
+
+        // offsets to the various uniform values in float32 indices
+        /*
+        const kColorOffset = 0;
+        const kScaleOffset = 4;
+        const kOffsetOffset = 6;
+        */
+        // create 2 buffers for the uniform values
+        const staticUniformBufferSize =
+            4 * 4 + // color is 4 32bit floats (4bytes each)
+            2 * 4 + // offset is 2 32bit floats (4bytes each)
+            2 * 4;  // padding
+        const uniformBufferSize =
+            2 * 4;  // scale is 2 32bit floats (4bytes each)
+        
+        // offsets to the various uniform values in float32 indices
+        const kColorOffset = 0;
+        const kOffsetOffset = 4;
+        
+        const kScaleOffset = 0;
+
+        const kNumObjects = 100;
+        const objectInfos = [];
+
+        /*
+            We can create one uniform buffer per thing we want to draw. 
+            And, since buffers are used indirectly through bind groups, we’ll also need one bind group per thing we want to draw. 
+            Then we can put all the things we want to draw into a single command buffer.
+        */
+        /*
+        for (let i = 0; i < kNumObjects; ++i) {
+            const uniformBuffer = device.createBuffer({
+                label: `uniforms for obj: ${i}`,
+                size: uniformBufferSize,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+        
+            // create a typedarray to hold the values for the uniforms in JavaScript
+            const uniformValues = new Float32Array(uniformBufferSize / 4);
+            uniformValues.set([rand(), rand(), rand(), 1], kColorOffset);        // set the color
+            uniformValues.set([rand(-0.9, 0.9), rand(-0.9, 0.9)], kOffsetOffset);      // set the offset
+        
+            const bindGroup = device.createBindGroup({
+                label: `bind group for obj: ${i}`,
+                layout: pipeline.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: { buffer: uniformBuffer }},
+                ],
+            });
+        
+            objectInfos.push({
+                scale: rand(0.2, 0.5),
+                uniformBuffer,
+                uniformValues,
+                bindGroup,
+            });
+        }
+        */
+
+        for (let i = 0; i < kNumObjects; ++i) {
+            const staticUniformBuffer = device.createBuffer({
+                label: `static uniforms for obj: ${i}`,
+                size: staticUniformBufferSize,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+        
+            // These are only set once so set them now
+            {
+                const uniformValues = new Float32Array(staticUniformBufferSize / 4);
+                uniformValues.set([rand(), rand(), rand(), 1], kColorOffset);        // set the color
+                uniformValues.set([rand(-0.9, 0.9), rand(-0.9, 0.9)], kOffsetOffset);      // set the offset
+            
+                // copy these values to the GPU
+                device.queue.writeBuffer(staticUniformBuffer, 0, uniformValues);
+            }
+        
+            // create a typedarray to hold the values for the uniforms in JavaScript
+            const uniformValues = new Float32Array(uniformBufferSize / 4);
+            const uniformBuffer = device.createBuffer({
+                label: `changing uniforms for obj: ${i}`,
+                size: uniformBufferSize,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+        
+            const bindGroup = device.createBindGroup({
+            label: `bind group for obj: ${i}`,
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: staticUniformBuffer }},
+                { binding: 1, resource: { buffer: uniformBuffer }},
+            ],
+            });
+        
+            objectInfos.push({
+                scale: rand(0.2, 0.5),
+                uniformBuffer,
+                uniformValues,
+                bindGroup,
+            });
+        }
+        
+        //uniformValues.set([0, 1, 0, 1], kColorOffset);        // set the color (green)
+        //uniformValues.set([-0.5, -0.25], kOffsetOffset);      // set the offset for triangle
+
+        // create a bind group and bind the buffer to the same @binding(?) we set in our shader = binding 0
+        /*
+            const bindGroup = device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+            { binding: 0, resource: { buffer: uniformBuffer }},
+            ],
+        });
+        */
+
+        /*
+            GPURenderPassDescriptor
+            Describes which textures we want to draw to and how to use them
+            colorAttachments => lists the textures we will render to and how to treat them
+            clearValue => with which color to clear the canvas/texture
+            loadOp: 'clear' => specifies to clear the texture to the clear value before drawing
+            loadOp: 'load' => load the existing contents of the texture into the GPU so we can draw over what’s already there 
+            storeOp: 'store' => store the result of what we draw
+            storeOp: 'discard' => throw away what we draw
+
+            Element 0 of the colorAttachments array corresponds to @location(0) as we specified for the return value of the fragment shader
+        */
+        // Prepare GPURenderPassDescriptor
+        const renderPassDescriptor = {
+            label: 'our basic canvas renderPass',
+            colorAttachments: [
+            {
+                // view: <- to be filled out when we render
+                clearValue: [0.3, 0.3, 0.3, 1],
+                loadOp: 'clear',
+                storeOp: 'store',
+            },
+            ],
+        };  
+
+        const canvasToSizeMap = new WeakMap();
+
+        function resizeCanvasToDisplaySize(canvas) {
+            // Get the canvas's current display size
+            let { width, height } = canvasToSizeMap.get(canvas) || canvas;
+
+            // Make sure it's valid for WebGPU
+            width = Math.max(1, Math.min(width, device.limits.maxTextureDimension2D));
+            height = Math.max(1, Math.min(height, device.limits.maxTextureDimension2D));
+
+            // Only if the size is different, set the canvas size
+            const needResize = canvas.width !== width || canvas.height !== height;
+            if (needResize) {
+                canvas.width = width;
+                canvas.height = height;
+            }
+            return needResize;
+        }
+
+        // Render
+        function render() {
+            // Set the uniform values in our JavaScript side Float32Array
+            /*
+            const aspect = canvas.width / canvas.height;
+            uniformValues.set([0.5 / aspect, 0.5], kScaleOffset); // set the scale
+        
+            // copy the values from JavaScript to the GPU
+            device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
+            */
+
+            resizeCanvasToDisplaySize(canvas);
+
+            // Get the current texture from the canvas context and set it as the texture to render to.
+            renderPassDescriptor.colorAttachments[0].view = context.getCurrentTexture().createView();
+        
+            // make a command encoder to start encoding commands
+            const encoder = device.createCommandEncoder({ label: 'our encoder' });
+        
+            // make a render pass encoder to encode render specific commands
+            const pass = encoder.beginRenderPass(renderPassDescriptor);
+            pass.setPipeline(pipeline);
+
+            // Set the uniform values in our JavaScript side Float32Array
+            const aspect = canvas.width / canvas.height;
+            
+            for (const {scale, bindGroup, uniformBuffer, uniformValues} of objectInfos) {
+                uniformValues.set([scale / aspect, scale], kScaleOffset); // set the scale
+                device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
+                pass.setBindGroup(0, bindGroup);
+                pass.draw(3);  // call our vertex shader 3 times
+            }
+
+            pass.end();
+        
+            const commandBuffer = encoder.finish();
+            device.queue.submit([commandBuffer]);
+        }
+    
+        /*
+            <canvas> tags, by default, have a resolution of 300x150 pixels. 
+            We’d like to adjust the resolution of the canvas to match the size it is displayed.
+            create a ResizeObserver and give it a function to call whenever the elements you’ve asked it to observe change their size. 
+            You then tell it which elements to observe.
+
+            We go through all entries, but it should only be one => our one canvas. 
+            We need to limit the size of the canvas to the largest size our device supports otherwise WebGPU will start generating errors that we tried to make a texture that is too large. 
+            We also need to make sure it doesn’t go to zero or again we’ll get errors.
+            
+            We call render to re-render the triangle at the new resolution.
+
+            The new size texture is created when we call context.getCurrentTexture() inside render
+        */
+        const observer = new ResizeObserver(entries => {
+            for (const entry of entries) {
+                canvasToSizeMap.set(entry.target, {
+                    width: entry.contentBoxSize[0].inlineSize,
+                    height: entry.contentBoxSize[0].blockSize,
+                });
+            }
+            render();
+        });
+        observer.observe(canvas);
+    }
+
+    function fail(msg) {
+    // eslint-disable-next-line no-alert
+        alert(msg);
+    }
+</script>

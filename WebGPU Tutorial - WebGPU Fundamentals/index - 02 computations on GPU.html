@@ -1,0 +1,150 @@
+<canvas></canvas>
+<script type="module">
+    async function main() {
+        const adapter = await navigator.gpu?.requestAdapter();
+        const device = await adapter?.requestDevice();
+        if (!device) {
+            fail('need a browser that supports WebGPU');
+            return;
+        }
+
+        const module = device.createShaderModule({
+            label: 'doubling compute module',
+            code: `
+            // Compute shader
+            /*
+                data:               variable
+                storage:            type of variable (want to write to and read from it)
+                read_write:         want to read and write to variable
+                array<f32>:         type of variable (array of 32bit floats)
+                @binding(0):        variable is on binding location 0
+                @group():           variable is in binding group 0
+                @compute:           compute shader
+                @workgroup_size(1): number of __ per workgroup
+                id:                 parameter of function computeSomething
+                vec3u:              parameter is of type vector with 3 unsigned 32bit int values
+                @builtin(global_invocation_id): parameter id gets value from this global_invocation_id
+
+                Compute shader iteration numbers are 3 dimensional (have 3 values)
+                Because workgroup_size is 1, we can just use let i = id.x;
+            */
+            @group(0) @binding(0) var<storage, read_write> data: array<f32>;
+
+            @compute @workgroup_size(1) fn computeSomething(@builtin(global_invocation_id) id: vec3u) {
+                let i = id.x;
+                data[i] = data[i] * 2.0;
+            }
+            `,
+        });
+
+        // Create pipeline
+        // This pipeline only uses compute shader, but you can also add vertex and fragment shaders in the same pipeline (or multiple compute shaders)
+        const pipeline = device.createComputePipeline({
+            label: 'doubling compute pipeline',
+            layout: 'auto',
+            compute: {
+                entryPoint: 'computeSomething',
+                module,
+            },
+        });
+
+        const input = new Float32Array([1, 3, 5]);
+
+        // Make a buffer on GPU, to send input data to it
+        // create a buffer on the GPU to hold our computation
+        // input and output
+        /*
+            device.createBuffer => creates a buffer
+            size => size of buffer in bytes (in this case, buffer is the same size as input) (12bytes = 3 values of 32bit floats (1byte = 8bit) 3 * (32/8))
+            usage => every buffer needs to specify usage (not all flags can be used together)
+                GPUBufferUsage.STORAGE => want to make buffer usable as storage (makes it compatible with var<storage,...> from the shader)
+                GPUBufferUsage.COPY_DST => want to copy data to this buffer
+                GPUBufferUsage.COPY_SRC => want to copy data from this buffer
+
+            Cannot directly read contents of the buffer from JS -> you have to "map" it (request access to the buffer from WebGPU)
+            Buffers that can be mapped in JavaScript can’t be used for much else 
+            (we can not map the buffer we just created above and if we try to add the flag to make it mappable, we’ll get an error that it is not compatible with usage STORAGE)
+            To view the result of computation, we need another buffer
+        */
+        const workBuffer = device.createBuffer({
+            label: 'work buffer',
+            size: input.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        });
+        // Copy our input data to that buffer
+        device.queue.writeBuffer(workBuffer, 0, input);
+
+        // Create a buffer on the GPU to get a copy of the results
+        /*
+            GPUBufferUsage.MAP_READ => we want to map this buffer for reading data
+            GPUBufferUsage.COPY_DST => want to copy data to this buffer
+        */
+        const resultBuffer = device.createBuffer({
+            label: 'result buffer',
+            size: input.byteLength,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+        });
+
+        // Setup a bindGroup to tell the shader which
+        // buffer to use for the computation
+        /*
+            We get the layout for the bindGroup from the pipeline
+            pipeline.getBindGroupLayout(0) => corresponds to @group(0) in shader
+            {binding: 0 ... of the entries => corresponds to @group(0) @binding(0) in shader
+        */
+        const bindGroup = device.createBindGroup({
+            label: 'bindGroup for work buffer',
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: workBuffer } },
+            ],
+        });
+
+        // Encode commands to do the computation
+        /*
+            0 in pass.setBindGroup(0, bindGroup) => corresponds to @group(0) in shader
+            dispatchWorkgroups(input.length) => in our case length = 3, this tells WebGPU to run the compute shader 3 times
+        */
+        const encoder = device.createCommandEncoder({
+            label: 'doubling encoder',
+        });
+        const pass = encoder.beginComputePass({
+            label: 'doubling compute pass',
+        });
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(input.length);
+        pass.end();
+
+        // Encode a command to copy the results to a mappable buffer (from workBuffer to resultBuffer after computation finishes).
+        encoder.copyBufferToBuffer(workBuffer, 0, resultBuffer, 0, resultBuffer.size);
+
+        // Finish encoding and submit the commands
+        const commandBuffer = encoder.finish();
+        device.queue.submit([commandBuffer]);
+
+        // Map the results buffer and get a copy of the data
+        // Read the results
+        /*
+            mapAsync => to map results to result buffer
+            resultBuffer.getMappedRange() => with no parameters, returns an ArrayBuffer of the entire buffer
+
+            The ArrayBuffer returned by getMappedRange is only valid until we call unmap.
+            After unmap, its length will be set to 0 and its data no longer accessible
+        */
+        await resultBuffer.mapAsync(GPUMapMode.READ);
+        const result = new Float32Array(resultBuffer.getMappedRange());
+        
+        console.log('input', input);
+        console.log('result', result);
+        
+        resultBuffer.unmap();
+    }
+
+    function fail(msg) {
+        // eslint-disable-next-line no-alert
+        alert(msg);
+    }
+
+    await main();
+</script>

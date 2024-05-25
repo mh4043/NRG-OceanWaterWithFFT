@@ -1,0 +1,132 @@
+<!-- Ctrl + F5 to refresh website when changing css-->
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <meta http-equiv='X-UA-Compatible' content='IE=edge'>
+    <title>Ocean Waves with FFT</title>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <link rel='stylesheet' type='text/css' media='screen' href='main.css'>
+    <script src='main.js'></script>
+    <script src="Scripts/webgl-utils.js"></script>
+    <script src="Scripts/gl-matrix.js"></script>
+    <script src="Scripts/math.js"></script>
+    <script src="Scripts/fft.js"></script>
+
+    <!-- vertex shader -->
+    <script id="vertex-shader" type="x-shader/x-vertex">
+        attribute vec3 aPosition;
+        attribute vec3 aNormal;
+
+        uniform mat4 uViewMatrix;
+        uniform mat4 uProjectionMatrix;
+
+        varying vec3 vNormal;
+        varying vec3 vPosition;
+
+        void main() {
+            /*
+            vec4 viewPosition = uViewMatrix * vec4(aPosition, 1.0);
+            gl_Position = uProjectionMatrix * viewPosition;
+            gl_PointSize = 4.0;
+            */
+
+            vPosition = (uViewMatrix * vec4(aPosition, 1.0)).xyz;
+            vNormal = (uViewMatrix * vec4(aNormal, 0.0)).xyz;
+            gl_Position = uProjectionMatrix * vec4(vPosition, 1.0);
+        }
+    </script>
+    <!-- fragment shader -->
+    <script  id="fragment-shader" type="x-shader/x-fragment">
+        precision mediump float;
+
+        uniform vec3 uCameraPosition;
+        uniform vec3 uLightPosition;
+
+        varying vec3 vPosition;
+        varying vec3 vNormal;
+
+        vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+            return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+        }
+
+        void main() {
+            //gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+
+            /*
+            vec3 normal = normalize(vNormal);
+            vec3 viewDir = normalize(uCameraPosition - vPosition);
+            vec3 lightDir = normalize(uLightPosition - vPosition);
+            vec3 halfDir = normalize(lightDir + viewDir);
+          
+            float NdotL = max(dot(normal, lightDir), 0.0);
+            float NdotV = max(dot(normal, viewDir), 0.0);
+            float NdotH = max(dot(normal, halfDir), 0.0);
+            float VdotH = max(dot(viewDir, halfDir), 0.0);
+          
+            vec3 F0 = vec3(0.04);
+            vec3 F = fresnelSchlick(max(dot(halfDir, viewDir), 0.0), F0);
+          
+            float roughness = 0.2; // Adjust based on the roughness of the ocean surface
+            float D = pow(NdotH, (2.0 / (roughness * roughness)) - 2.0); // GGX Distribution
+          
+            vec3 kS = F;
+            vec3 kD = vec3(1.0) - kS;
+            kD *= 1.0 - 0.0; // Assuming no metalness in water
+          
+            vec3 diffuse = kD * NdotL;
+            vec3 specular = kS * D * NdotL;
+          
+            vec3 finalColor = (diffuse + specular) * vec3(0.0, 0.5, 0.7); // Base ocean color
+          
+            gl_FragColor = vec4(finalColor, 1.0);
+            */
+
+            vec3 normal = normalize(vNormal);
+            vec3 viewDir = normalize(uCameraPosition - vPosition);
+            vec3 lightDir = normalize(uLightPosition - vPosition);
+            vec3 halfDir = normalize(lightDir + viewDir);
+
+            float NdotL = max(dot(normal, lightDir), 0.0);
+            float NdotV = max(dot(normal, viewDir), 0.0);
+            float NdotH = max(dot(normal, halfDir), 0.0);
+            float VdotH = max(dot(viewDir, halfDir), 0.0);
+
+            vec3 F0 = vec3(0.04);
+            vec3 F = fresnelSchlick(max(dot(halfDir, viewDir), 0.0), F0);
+
+            float roughness = 0.2; // Adjust based on the roughness of the ocean surface
+            float D = pow(NdotH, (2.0 / (roughness * roughness)) - 2.0); // GGX Distribution
+
+            vec3 kS = F;
+            vec3 kD = vec3(1.0) - kS;
+            kD *= 1.0 - 0.0; // Assuming no metalness in water
+
+            vec3 diffuse = kD * NdotL;
+            vec3 specular = kS * D * NdotL;
+
+            vec3 reflectionDir = reflect(-viewDir, normal);
+            vec3 refractionDir = refract(-viewDir, normal, 1.0 / 1.33); // Assuming water refraction index is 1.33
+
+            // Simple one-bounce tracing (reflection only)
+            vec3 reflectedColor = vec3(0.0, 0, 0.5); // Compute based on environment or skybox
+            vec3 refractedColor = vec3(0.0, 0.3, 0.7);; // Compute based on underwater color
+
+            // Combining reflection and refraction
+            vec3 finalColor = mix(reflectedColor, refractedColor, 0.5);
+
+            gl_FragColor = vec4(finalColor + diffuse + specular, 1.0);
+        }
+    </script>
+</head>
+<body>
+    <h3>Ocean waves with FFT on CPU</h3>
+    <button class="btnStartSimulation" id="btnStartSimulation">Start simulation</button>
+
+    <p><b>Controls:</b> <u>rotate</u>: left mouse button, <u>move</u>: shift + left mouse button, <u>zoom</u>: scroll wheel</p>
+
+    <div class ="canvasDiv"><canvas id="canv" class="canv"></canvas></div>
+      
+</body>
+</html>
