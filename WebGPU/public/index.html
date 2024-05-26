@@ -15,7 +15,71 @@
 
   <p><b>Controls:</b> <u>rotate</u>: left mouse button, <u>move</u>: shift + left mouse button, <u>zoom</u>: scroll wheel</p>
 
+  <br>
+
   <div class ="canvasDiv"><canvas id="canv" class="canv" width="600" height="600"></canvas></div>
+
+  <div class="settingsDiv">
+    <h2>Parameters</h2>
+
+    <span><b>Resolution (N, M) *</b></span>
+    <br>
+    <!-- 1 = 32x32, 2 = 64x64, 3 = 128x128, 4 = 256x256, 5 = 512x512 -->
+    <input id="sliderResolution" class="parameterSlider" type="range" min="1" max="5" step="1" value="2">
+    <span id="sliderResolutionValue">64x64</span>
+
+    <br>
+    <br>
+
+    <span><b>Wave Heights Constant (A) *</b></span>
+    <br>
+    <!-- 0.1 = 0.1e^-7, 9.9 = 9.9e^-7 -->
+    <input id="sliderWaveHeight" class="parameterSlider" type="range" min="0.1" max="9.9" step="0.1" value="3">
+    <span id="sliderWaveHeightValue">3*e^-7</span>
+
+    <br>
+    <br>
+
+    <span><b>Wind Speed (V) *</b></span>
+    <br>
+    <!-- 0 = 0kmh, 100 = 100m/s -->
+    <input id="sliderWindSpeed" class="parameterSlider" type="range" min="0" max="100" step="1" value="30">
+    <span id="sliderWindSpeedValue">30m/s</span>
+
+    <br>
+    <br>
+
+    <span><b>Wind Direction (&omega;) *</b></span>
+    <br>
+    <!-- 0 = 0°, 360 = 360° -->
+    <input id="sliderWindDirection" class="parameterSlider" type="range" min="0" max="360" step="1" value="45">
+    <span id="sliderWindDirectionValue">45°</span>
+
+    <br>
+    <br>
+
+    <span><b>Small Wave Cutoff (l) *</b></span>
+    <br>
+    <!-- 0.1 = 0.1m, 20 = 20m -->
+    <input id="sliderWaveCutoff" class="parameterSlider" type="range" min="0.1" max="20" step="0.1" value="0.1">
+    <span id="sliderWaveCutoffValue">0.1m</span>
+
+    <br>
+    <br>
+
+    <span><b>Wave Choppiness Constant (&lambda;)</b></span>
+    <br>
+    <!-- 0 = no choppiness, 5 = a lot of choppiness -->
+    <input id="sliderWaveChoppiness" class="parameterSlider" type="range" min="0" max="5" step="0.1" value="1">
+    <span id="sliderWaveChoppinessValue">1</span>
+
+    <br>
+    <br>
+
+    <span><i>* Restarts simulation, except camera</i></span>
+    <br>
+    <span><b>** If the animation stops while changing parameters, change the parameter again a bit.</b></span>
+  </div>
   
 </body>
 </html>

@@ -1,3 +1,4 @@
+import GUI from './Scripts/muigui.module.js';
 import {utils, mat4, vec4, vec3, vec2} from './Scripts/wgpu-matrix.module.js';
 
 var simulationStarted = false;
@@ -9,11 +10,11 @@ var M; // The size of the Fourier grid (number of discrete points along z coord,
 var Lx; // The physical dimension of the ocean, width (x) (in m or km)
 var Lz; // The physical dimension of the ocean, length (z) (in m or km)
 // Lx, Lz determine the scale of the ocean
-// dx, dz => facet sizes, dx = Lx/M, dz = Lz/N
+// dx, dz => facet sizes, dx = Lx/M, dz = Lz/N (dx, dz larger than 2cm, smaller than V^2/g by substantial amount (10-1000))
 var V; // Speed of wind (in m/s)
 var omega; // Direction of wind (normalized value, horizontal (along x and z axis))
 var l; // Minimum wave height (small wave cuttoff) (in m)
-var A; // Numerical constant to increase or decrease wave height (10^-10 calmer conditions, 10^-5 rougher conditions)
+var A;/*0.000003;*/ // Numerical constant to increase or decrease wave height (10^-10 calmer conditions, 10^-5 rougher conditions)
 var g; // Gravitational constant (m/s^2)
 var lambda; // Wave choppiness
 
@@ -41,7 +42,6 @@ var camera = {
     lastMouseY: 0
 };
 
-// Arrays that hold wave height field values
 var wave_height_field_final;
 var wave_normal_field_final;
 var initial_wave_height_field;
@@ -73,51 +73,6 @@ var projectionMatrixUniform;
 var cameraPositionUniform;
 var lightPositionUniform;
 
-var computePipeline;
-var computeUniformBuffer;
-var computeUniformValues;
-var computeBindGroupHeight;
-/*
-var computeBindGroupSlopeX;
-var computeBindGroupSlopeZ;
-var computeBindGroupDispX;
-var computeBindGroupDispZ;
-*/
-
-var fftN;
-var fftLevels;
-var fftCosTable;
-var fftSinTable;
-var fftCosTableBuffer;
-var fftSinTableBuffer;
-var fftRealBufferHeight;
-var fftImagBufferHeight;
-/*
-var fftRealBufferSlopeX;
-var fftImagBufferSlopeX;
-var fftRealBufferSlopeZ;
-var fftImagBufferSlopeZ;
-var fftRealBufferDispX;
-var fftImagBufferDispX;
-var fftRealBufferDispZ;
-var fftImagBufferDispZ;
-*/
-
-var fftRealBufferResultHeight;
-var fftImagBufferResultHeight;
-/*
-var fftRealBufferResultSlopeX;
-var fftImagBufferResultSlopeX;
-var fftRealBufferResultSlopeZ;
-var fftImagBufferResultSlopeZ;
-var fftRealBufferResultDispX;
-var fftImagBufferResultDispX;
-var fftRealBufferResultDispZ;
-var fftImagBufferResultDispZ;
-*/
-
-var buffersMapped = false;
-
 var vertexBufferPositions;
 var vertexBufferNormals;
 var indexBuffer;
@@ -145,7 +100,7 @@ Complex.prototype.multiply = function(other) {
         this.real * other.imaginary + this.imaginary * other.real
     );
 };
-// Function to compute the conjugate of the complex number
+// Method to compute the conjugate of the complex number
 Complex.prototype.conjugate = function() {
     return new Complex(this.real, -this.imaginary); // Negate the imaginary part
 };
@@ -164,23 +119,6 @@ async function start(){
 function main(){
     if(animationFrameId != null){
         cancelAnimationFrame(animationFrameId);
-        /*
-        if(buffersMapped){
-            try {
-                fftRealBufferResultHeight.unmap();
-                fftImagBufferResultHeight.unmap();
-                // Access the mapped buffer here
-            } catch (error) {
-                //console.error("Failed to map buffer:", error);
-            }
-        }
-        */
-        // wait for buffers to be unmapped
-        //while(true){
-        //    if(buffersMapped == false){
-        //        break;
-        //    }
-        //}
     }
 
     num_of_points = N * M;
@@ -191,8 +129,6 @@ function main(){
     initializeStartingArrays();
     initializeIndices();
     initializeVertexBuffers();
-    prepareForIFFT();
-    generateComputeShader();
     
     computeInitialWaveHeightFields();
 
@@ -207,7 +143,9 @@ function initializeParameters(){
     M = 64;
     //M = 256;
     Lx = 1000;
+    //Lx = 100
     Lz = 1000;
+    //Lz = 100
     V = 30;
     omega = vec2.fromValues(1, 1); //45°
     l = 0.1;
@@ -218,7 +156,6 @@ function initializeParameters(){
     lightPosition = vec3.fromValues(0, 20, 0);
 }
 
-// Initializes arrays that hold ocean height values
 function initializeStartingArrays(){
     // h(x,t)
     wave_height_field_final = new Array(num_of_points); // heights
@@ -230,12 +167,11 @@ function initializeStartingArrays(){
     // ~h*0(k)
     initial_wave_height_field_conj = new Array(num_of_points);
     // ~h(k,t)
-    wave_height_field = new Array(num_of_points);
+    wave_height_field = new Array(num_of_points); // vsebuje pravilne pozicije točk (array of vec3 (x, y, z))
 }
 
-// Initializes indices for vertices to be drawn as triangles
 function initializeIndices(){
-    // column-major
+    // column-major (could be row-major - check)
     // 6 * (N - 1) * (M - 1)
     indices = [];
     for (let n = 0; n < N - 1; n++) {
@@ -272,7 +208,7 @@ function initializeTransformationMatrices(){
     mat4.perspective(fovy, aspect, near, far, projectionMatrix);
 }
 
-// Sets event handlers (visibilitychange, mouse, keyboard)
+// Sets event handlers (visibilitychange, mouse, keyboard) (once per page load)
 function setEventHandlers(){
     // Mouse event handlers (for camera orbiting, moving and zooming)
     canvas.addEventListener('mousedown', (event) => {
@@ -357,7 +293,6 @@ function updateViewMatrix() {
     mat4.lookAt(camera.eye, camera.target, camera.up, viewMatrix);
 }
 
-// Set parameters sliders event listeners
 function setSliderListeners(){
     document.getElementById("sliderResolution").addEventListener('input', function() {
         var newResolution = N;
@@ -421,7 +356,6 @@ function setSliderListeners(){
     }, false);
 }
 
-// Initializes WebGPU with shaders and pipelines
 async function initializeWebGPU(){
     // Check availability and get adapter and device
     if (!navigator.gpu) {
@@ -450,7 +384,7 @@ async function initializeWebGPU(){
         format: presentationFormat,
     });
 
-    // Create a shader module with vertex and fragment shader (rendering)
+    // Create a shader module with vertex and fragment shader
     const shaderModule = device.createShaderModule({
         label: 'Rendering shader module',
         code:
@@ -536,83 +470,6 @@ async function initializeWebGPU(){
         `
     });
 
-    // Create a shader module with compute shader
-    // fft algorithm gotten from fft.js library and modified
-    const shaderModuleCompute = device.createShaderModule({
-        label: 'Computing shader module',
-        code: 
-        `
-        struct Uniforms{
-            n: i32,
-            levels: i32
-        };
-
-        @group(0) @binding(0) var<storage, read_write> real: array<f32>;
-        @group(0) @binding(1) var<storage, read_write> imag: array<f32>;
-        @group(0) @binding(2) var<storage, read> cosTable: array<f32>;
-        @group(0) @binding(3) var<storage, read> sinTable: array<f32>;
-        @group(0) @binding(4) var<uniform> uniforms: Uniforms;
-        
-        fn unsignedRightShift(val: i32, shift: u32) -> i32 {
-            return val >> shift;
-        }
-
-        fn reverseBits(val: i32, width: i32) -> i32 {
-            var val2 = val;
-            var result = 0;
-            for (var i = 0; i < width; i++) {
-                result = (result << 1) | (val2 & 1);
-                val2 = unsignedRightShift(val2, 1u);;
-            }
-            return result;
-        }
-
-        fn performIFFT() {
-            // Bit-reversed addressing permutation
-            for (var i = 0; i < uniforms.n; i++) {
-                let j = reverseBits(i, uniforms.levels);
-                if (j > i) {
-                    var temp = real[i];
-                    real[i] = real[j];
-                    real[j] = temp;
-                    temp = imag[i];
-                    imag[i] = imag[j];
-                    imag[j] = temp;
-                }
-            }
-
-            // Cooley-Tukey decimation-in-time radix-2 FFT
-            for (var size = 2; size <= uniforms.n; size *= 2) {
-                let halfsize = size / 2;
-                let tablestep = uniforms.n / size;
-                for (var i = 0; i < uniforms.n; i += size) {
-                    var k = 0;
-                    for (var j = i; j < i + halfsize; j++) {
-                        let l = j + halfsize;
-                        let tpre = real[l] * cosTable[k] + imag[l] * sinTable[k];
-                        let tpim = -real[l] * sinTable[k] + imag[l] * cosTable[k];
-                        real[l] = real[j] - tpre;
-                        imag[l] = imag[j] - tpim;
-                        real[j] += tpre;
-                        imag[j] += tpim;
-                        k += tablestep;
-                    }
-                }
-            }
-        }
-
-        //[[stage(compute), workgroup_size(64)]]
-        @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-
-            var t_id = global_id.x;
-
-            if(t_id == 0){
-                performIFFT();
-            }
-        }
-        `
-    });
-
     // Create render pipeline
     renderPipeline = device.createRenderPipeline({
         label: 'Render pipeline',
@@ -654,20 +511,10 @@ async function initializeWebGPU(){
         },
     });
 
-    // Create compute pipeline
-    computePipeline = device.createComputePipeline({
-        label: 'compute pipeline',
-        layout: 'auto',
-        compute: {
-            module: shaderModuleCompute,
-            entryPoint: 'main'
-        },
-    });
-
     // Preparing for uniforms
     // Set sizes of uniform structs
     const vertUniformBufferSize = 2 * 16 * 4; // 2 mat4s * 16 floats per mat * 4 bytes per float
-    const fragUniformBufferSize = 2 * 3 * 4 + 8; // 2 vec3 * 3 floats per vec3 * 4 bytes per float, +8 = padding (min size is 32bytes)
+    const fragUniformBufferSize = 2 * 3 * 4 + 8; // 2 vec3 * 3 floats per vec3 * 4 bytes per float (might need to add padding), +8 = padding (min size is 32bytes)
 
     // Create uniform buffers
     vsUniformBuffer = device.createBuffer({
@@ -688,7 +535,7 @@ async function initializeWebGPU(){
     lightPositionUniform = fsUniformValues.subarray(3, 6);
 
     // Create bind group -> what resources the shader will use (getBindGroupLayout(0) = @group(0), binding: 0 = @binding(0))
-    // If FragmentShaderUniforms is currently not used in shader => discards entry with fsUniformBuffer and throws error
+    // Error because in fragment shader, FragmentShaderUniforms is currently not used, so it discards entry with fsUniformBuffer
     bindGroup = device.createBindGroup({
         label: 'bind group for shader module',
         layout: renderPipeline.getBindGroupLayout(0),
@@ -728,7 +575,6 @@ async function initializeWebGPU(){
     observer.observe(canvas);
 }
 
-// Initializes vertex buffers for WebGPU (positions, normals)
 function initializeVertexBuffers(){
     // Set buffers
     vertexBufferPositions = device.createBuffer({
@@ -749,244 +595,7 @@ function initializeVertexBuffers(){
     device.queue.writeBuffer(indexBuffer, 0, indices);
 }
 
-// Sets static parameters that are needed in IFFT process
-function prepareForIFFT(){
-    fftN = num_of_points;
 
-    fftLevels = -1;
-    for (let i = 0; i < 32; i++) {
-        if (1 << i == fftN)
-            fftLevels = i; // Equal to log2(n)
-    }
-
-    // Trigonometric tables
-    fftCosTable = new Float32Array(fftN / 2);
-    fftSinTable = new Float32Array(fftN / 2);
-    for (let i = 0; i < fftN / 2; i++) {
-        fftCosTable[i] = Math.cos(2 * Math.PI * i / fftN);
-        fftSinTable[i] = Math.sin(2 * Math.PI * i / fftN);
-    }
-}
-
-// Prepares buffers for IFFTs to execute in compute shader
-function generateComputeShader(){
-    const computeUniformBufferSize = 4 + 4; // 2 float32s
-
-    // Create uniform buffers
-    computeUniformBuffer = device.createBuffer({
-        size: computeUniformBufferSize,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    computeUniformValues = new Uint32Array([fftN, fftLevels]);
-    device.queue.writeBuffer(computeUniformBuffer, 0, computeUniformValues);
-
-    // Prepare buffers for tables and write them
-    fftCosTableBuffer = device.createBuffer({
-        label: 'cos table buffer',
-        size: fftCosTable.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
-    // Copy our input data to that buffer
-    device.queue.writeBuffer(fftCosTableBuffer, 0, fftCosTable);
-    
-    // create a buffer on the GPU to get a copy of the results
-    fftSinTableBuffer = device.createBuffer({
-        label: 'sin table buffer',
-        size: fftSinTable.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
-    // Copy our input data to that buffer
-    device.queue.writeBuffer(fftSinTableBuffer, 0, fftSinTable);
-
-    // Prepare buffers for real and imag data (height, slope x, slope z, displacement x, displacement z)
-    {
-        fftRealBufferHeight = device.createBuffer({
-            label: 'real buffer height',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-        fftImagBufferHeight = device.createBuffer({
-            label: 'imag buffer height',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-
-        /*
-        fftRealBufferSlopeX = device.createBuffer({
-            label: 'real buffer slope x',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-        fftImagBufferSlopeX = device.createBuffer({
-            label: 'imag buffer slope x',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-
-        fftRealBufferSlopeZ = device.createBuffer({
-            label: 'real buffer slope z',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-        fftImagBufferSlopeZ = device.createBuffer({
-            label: 'imag buffer slope z',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-
-        fftRealBufferDispX = device.createBuffer({
-            label: 'real buffer disp x',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-        fftImagBufferDispX = device.createBuffer({
-            label: 'imag buffer disp x',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-
-        fftRealBufferDispZ = device.createBuffer({
-            label: 'real buffer disp z',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-        fftImagBufferDispZ = device.createBuffer({
-            label: 'imag buffer disp z',
-            size: num_of_points * 4, // 4 => 4bytes per 1 float
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-        });
-        */
-    }
-
-    // Create buffers to read results real and imag from compute shader (height, slope x, slope z, displacement x, displacement z)
-    {
-        fftRealBufferResultHeight = device.createBuffer({
-            label: 'result real buffer height',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-        fftImagBufferResultHeight = device.createBuffer({
-            label: 'result imag buffer height',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-
-        /*
-        fftRealBufferResultSlopeX = device.createBuffer({
-            label: 'result real buffer slope x',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-        fftImagBufferResultSlopeX = device.createBuffer({
-            label: 'result imag buffer slope x',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-
-        fftRealBufferResultSlopeZ = device.createBuffer({
-            label: 'result real buffer slope z',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-        fftImagBufferResultSlopeZ = device.createBuffer({
-            label: 'result imag buffer slope z',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-
-        fftRealBufferResultDispX = device.createBuffer({
-            label: 'result real buffer disp x',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-        fftImagBufferResultDispX = device.createBuffer({
-            label: 'result imag buffer disp x',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-
-        fftRealBufferResultDispZ = device.createBuffer({
-            label: 'result real buffer disp z',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-        fftImagBufferResultDispZ = device.createBuffer({
-            label: 'result imag buffer disp z',
-            size: num_of_points * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-        */
-    }
-
-    // Create bindgroups for (height, slope x, slope z, displacement x, displacement z)
-    {
-        computeBindGroupHeight = device.createBindGroup({
-            label: 'bind group for compute shader module height',
-            layout: computePipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: fftRealBufferHeight } },
-                { binding: 1, resource: { buffer: fftImagBufferHeight } },
-                { binding: 2, resource: { buffer: fftCosTableBuffer } },
-                { binding: 3, resource: { buffer: fftSinTableBuffer } },
-                { binding: 4, resource: { buffer: computeUniformBuffer } },
-            ],
-        });
-
-        /*
-        computeBindGroupSlopeX = device.createBindGroup({
-            label: 'bind group for compute shader module slope x',
-            layout: computePipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: fftRealBufferSlopeX } },
-                { binding: 1, resource: { buffer: fftImagBufferSlopeX } },
-                { binding: 2, resource: { buffer: fftCosTableBuffer } },
-                { binding: 3, resource: { buffer: fftSinTableBuffer } },
-                { binding: 4, resource: { buffer: computeUniformBuffer } },
-            ],
-        });
-
-        computeBindGroupSlopeZ = device.createBindGroup({
-            label: 'bind group for compute shader module slope z',
-            layout: computePipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: fftRealBufferSlopeZ } },
-                { binding: 1, resource: { buffer: fftImagBufferSlopeZ } },
-                { binding: 2, resource: { buffer: fftCosTableBuffer } },
-                { binding: 3, resource: { buffer: fftSinTableBuffer } },
-                { binding: 4, resource: { buffer: computeUniformBuffer } },
-            ],
-        });
-
-        computeBindGroupDispX = device.createBindGroup({
-            label: 'bind group for compute shader module disp x',
-            layout: computePipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: fftRealBufferDispX } },
-                { binding: 1, resource: { buffer: fftImagBufferDispX } },
-                { binding: 2, resource: { buffer: fftCosTableBuffer } },
-                { binding: 3, resource: { buffer: fftSinTableBuffer } },
-                { binding: 4, resource: { buffer: computeUniformBuffer } },
-            ],
-        });
-
-        computeBindGroupDispZ = device.createBindGroup({
-            label: 'bind group for compute shader module disp Z',
-            layout: computePipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: fftRealBufferDispZ } },
-                { binding: 1, resource: { buffer: fftImagBufferDispZ } },
-                { binding: 2, resource: { buffer: fftCosTableBuffer } },
-                { binding: 3, resource: { buffer: fftSinTableBuffer } },
-                { binding: 4, resource: { buffer: computeUniformBuffer } },
-            ],
-        });
-        */
-    }
-
-}
-
-// Renders to canvas
 function render(){
     // Get the current texture from the canvas context and
     // set it as the texture to render to.
@@ -1040,8 +649,10 @@ function render(){
 
 // FFTs
 /*
+math.fft(array of values), math.ifft(array of math.complex values) => official math.js library
+or
 transform(array of real values, array of imaginary values(zeros)), inverseTransform(array of real values, array of imaginary values) => lightweight fft library
-with inverseTransform(), you have to scale the output real array (divide with the size of array)
+with inverseTransform(), you have to scale the output real array (divite with the size of array)
 */
 
 // (Equation 36) indexes can't be negative (-N/2 <= n < N/2), so we use indexes that are positive (0 >= n < N), and because of that
@@ -1089,6 +700,7 @@ function phillips(/*vec2*/ k_vec){
     
     var temp_1 = A;
     var temp_2 = Math.exp(-1.0 / Math.pow(k * L, 2)) / Math.pow(k, 4);
+    //var temp_3 = Math.pow(Math.abs(vec2.dot(k_hat, omega_hat)), 2);
     var temp_3 = Math.pow(vec2.dot(k_hat, omega_hat), 6); // 2 => surface less aligned with the wind direction
     var temp_4 = Math.exp(-Math.pow(k, 2) * Math.pow(l, 2)); // suppression of smaller waves factor (Equation 41)
 
@@ -1098,6 +710,7 @@ function phillips(/*vec2*/ k_vec){
 }
 
 // Equation 42 (is calculated only once per parameter change - if no parameters change, then this function doesn't get called)
+// we put all the initial values into an array
 function initialWaveHeightField(/*vec2*/ k_vec){
     var random_real = randomGaussian(0, 1);
     var random_imaginary = randomGaussian(0, 1);
@@ -1156,7 +769,7 @@ function simulateOcean(now){
     const fps = 1 / deltaTime; // compute frames per second
     previousTime = now; // remember time for next frame
 
-    // --- Setting variables ---
+        // --- Setting variables ---
 
     // for slope vectors (normal), Equation 37
     var slope_x = new Array(num_of_points);
@@ -1167,7 +780,7 @@ function simulateOcean(now){
     var displacement_z = new Array(num_of_points);
 
     // --- Calculating wave height field ---
-    //console.time("STEP 1: Calculating wave height field");
+    //console.time("Calculating wave height field");
 
     for(var n = 0; n < N; n++){
         for(var m = 0; m < M; m++){
@@ -1200,24 +813,24 @@ function simulateOcean(now){
         }
     }
 
-    //console.timeEnd("STEP 1: Calculating wave height field");
+    //console.timeEnd("Calculating wave height field");
 
     // Creating and populating real and imaginary arrays for inverse FFT with inverseTransform(real, imag) from fft.js
 
     // Arrays to hold the real and imaginary parts
-    let wave_height_field_real = new Float32Array(num_of_points);
-    let wave_height_field_imag = new Float32Array(num_of_points);
-    let slope_x_real = new Float32Array(num_of_points);
-    let slope_x_imag = new Float32Array(num_of_points);
-    let slope_z_real = new Float32Array(num_of_points);
-    let slope_z_imag = new Float32Array(num_of_points);
-    let displacement_x_real = new Float32Array(num_of_points);
-    let displacement_x_imag = new Float32Array(num_of_points);
-    let displacement_z_real = new Float32Array(num_of_points);
-    let displacement_z_imag = new Float32Array(num_of_points);
+    let wave_height_field_real = new Float64Array(num_of_points);
+    let wave_height_field_imag = new Float64Array(num_of_points);
+    let slope_x_real = new Float64Array(num_of_points);
+    let slope_x_imag = new Float64Array(num_of_points);
+    let slope_z_real = new Float64Array(num_of_points);
+    let slope_z_imag = new Float64Array(num_of_points);
+    let displacement_x_real = new Float64Array(num_of_points);
+    let displacement_x_imag = new Float64Array(num_of_points);
+    let displacement_z_real = new Float64Array(num_of_points);
+    let displacement_z_imag = new Float64Array(num_of_points);
 
     // Populate the real and imaginary arrays
-    //console.time("STEP 2: Populating the real and imaginary arrays");
+    //console.time("Populating the real and imaginary arrays");
 
     for (var i = 0; i < N * M; i++) {
         wave_height_field_real[i] = (wave_height_field[i].real);
@@ -1231,203 +844,58 @@ function simulateOcean(now){
         displacement_z_real[i] = (displacement_z[i].real);
         displacement_z_imag[i] = (displacement_z[i].imaginary);
     }
-    //console.timeEnd("STEP 2: Populating the real and imaginary arrays");
+    //console.timeEnd("Populating the real and imaginary arrays");
 
-    doBuffer();
+    // Calculating inverse FFT
+    //console.time("Performing IFFTs");
 
-    async function doBuffer(){
-        //console.time("STEP 1.5: COMPUTING");
+    // Equations 36, 37, 44 (represents the IFFT from the frequency domain back to the spatial domain), whole function is done by inverse transform
+    // results are written back to original arrays
+    // ifft usually divides computed values by number of points, but in our equations, that is not used, and inverseTransform() doesn't divide either
+    inverseTransform(wave_height_field_real, wave_height_field_imag);
+    inverseTransform(slope_x_real, slope_x_imag);
+    inverseTransform(slope_z_real, slope_z_imag);
+    inverseTransform(displacement_x_real, displacement_x_imag);
+    inverseTransform(displacement_z_real, displacement_z_imag);
 
-        // switch imag and real, to perform IFFT
-        device.queue.writeBuffer(fftRealBufferHeight, 0, wave_height_field_imag);
-        device.queue.writeBuffer(fftImagBufferHeight, 0, wave_height_field_real);
+    //console.timeEnd("Performing IFFTs");
 
-        /*
-        device.queue.writeBuffer(fftImagBufferSlopeX, 0, slope_x_imag);
-        device.queue.writeBuffer(fftImagBufferSlopeX, 0, slope_x_real);
+    // Creating normals and heights and setting the final normal and height fields
 
-        device.queue.writeBuffer(fftImagBufferSlopeZ, 0, slope_z_imag);
-        device.queue.writeBuffer(fftImagBufferSlopeZ, 0, slope_z_real);
+    //console.time("Creating normals and heights");
 
-        device.queue.writeBuffer(fftImagBufferDispX, 0, displacement_x_imag);
-        device.queue.writeBuffer(fftImagBufferDispX, 0, displacement_x_real);
+    for(var n = 0; n < N; n++){
+        for(var m = 0; m < M; m++){
+            var index = m * N + n;
+            var sign = 1;
 
-        device.queue.writeBuffer(fftImagBufferDispZ, 0, displacement_z_imag);
-        device.queue.writeBuffer(fftImagBufferDispZ, 0, displacement_z_real);
-        */
-
-        // Encode commands to do the computation
-        const encoder = device.createCommandEncoder({
-            label: 'doubling encoder',
-        });
-        const pass = encoder.beginComputePass({
-            label: 'doubling compute pass',
-        });
-        pass.setPipeline(computePipeline);
-
-        pass.setBindGroup(0, computeBindGroupHeight);
-        pass.dispatchWorkgroups(Math.ceil(wave_height_field_real.length / 64), 1, 1);
-
-        /*
-        pass.setBindGroup(0, computeBindGroupSlopeX);
-        pass.dispatchWorkgroups(Math.ceil(wave_height_field_real.length / 64), 1, 1);
-
-        pass.setBindGroup(0, computeBindGroupSlopeZ);
-        pass.dispatchWorkgroups(Math.ceil(wave_height_field_real.length / 64), 1, 1);
-
-        pass.setBindGroup(0, computeBindGroupDispX);
-        pass.dispatchWorkgroups(Math.ceil(wave_height_field_real.length / 64), 1, 1);
-
-        pass.setBindGroup(0, computeBindGroupDispZ);
-        pass.dispatchWorkgroups(Math.ceil(wave_height_field_real.length / 64), 1, 1);
-        */
-
-        pass.end();
-    
-        // Encode a command to copy the results to a mappable buffer.
-        encoder.copyBufferToBuffer(fftRealBufferHeight, 0, fftRealBufferResultHeight, 0, fftRealBufferResultHeight.size);
-        encoder.copyBufferToBuffer(fftImagBufferHeight, 0, fftImagBufferResultHeight, 0, fftImagBufferResultHeight.size);
-
-        /*
-        encoder.copyBufferToBuffer(fftRealBufferSlopeX, 0, fftRealBufferResultSlopeX, 0, fftRealBufferResultSlopeX.size);
-        encoder.copyBufferToBuffer(fftImagBufferSlopeX, 0, fftImagBufferResultSlopeX, 0, fftImagBufferResultSlopeX.size);
-
-        encoder.copyBufferToBuffer(fftRealBufferSlopeZ, 0, fftRealBufferResultSlopeZ, 0, fftRealBufferResultSlopeZ.size);
-        encoder.copyBufferToBuffer(fftImagBufferSlopeZ, 0, fftImagBufferResultSlopeZ, 0, fftImagBufferResultSlopeZ.size);
-
-        encoder.copyBufferToBuffer(fftRealBufferDispX, 0, fftRealBufferResultDispX, 0, fftRealBufferResultDispX.size);
-        encoder.copyBufferToBuffer(fftImagBufferDispX, 0, fftImagBufferResultDispX, 0, fftImagBufferResultDispX.size);
-
-        encoder.copyBufferToBuffer(fftRealBufferDispZ, 0, fftRealBufferResultDispZ, 0, fftRealBufferResultDispZ.size);
-        encoder.copyBufferToBuffer(fftImagBufferDispZ, 0, fftImagBufferResultDispZ, 0, fftImagBufferResultDispZ.size);
-        */
-    
-        // Finish encoding and submit the commands
-        const commandBuffer = encoder.finish();
-        device.queue.submit([commandBuffer]);
-
-        await commandBuffer.completed
-    
-        // Read the results
-
-        await fftRealBufferResultHeight.mapAsync(GPUMapMode.READ);
-        await fftImagBufferResultHeight.mapAsync(GPUMapMode.READ);
-
-        buffersMapped = true;
-        
-
-        /*
-        await fftRealBufferResultSlopeX.mapAsync(GPUMapMode.READ);
-        await fftImagBufferResultSlopeX.mapAsync(GPUMapMode.READ);
-
-        await fftRealBufferResultSlopeZ.mapAsync(GPUMapMode.READ);
-        await fftImagBufferResultSlopeZ.mapAsync(GPUMapMode.READ);
-
-        await fftRealBufferResultDispX.mapAsync(GPUMapMode.READ);
-        await fftImagBufferResultDispX.mapAsync(GPUMapMode.READ);
-
-        await fftRealBufferResultDispZ.mapAsync(GPUMapMode.READ);
-        await fftImagBufferResultDispZ.mapAsync(GPUMapMode.READ);
-        */
-
-        wave_height_field_real = new Float32Array(fftRealBufferResultHeight.getMappedRange().slice());
-        wave_height_field_imag = new Float32Array(fftImagBufferResultHeight.getMappedRange().slice());
-
-        /*
-        slope_x_real = new Float32Array(fftRealBufferResultSlopeX.getMappedRange().slice());
-        slope_x_imag = new Float32Array(fftImagBufferResultSlopeX.getMappedRange().slice());
-
-        slope_z_real = new Float32Array(fftRealBufferResultSlopeZ.getMappedRange().slice());
-        slope_z_imag = new Float32Array(fftImagBufferResultSlopeZ.getMappedRange().slice());
-
-        displacement_x_real = new Float32Array(fftRealBufferResultDispX.getMappedRange().slice());
-        displacement_x_imag = new Float32Array(fftImagBufferResultDispX.getMappedRange().slice());
-
-        displacement_z_real = new Float32Array(fftRealBufferResultDispZ.getMappedRange().slice());
-        displacement_z_imag = new Float32Array(fftImagBufferResultDispZ.getMappedRange().slice());
-        */
-
-        try {
-            fftRealBufferResultHeight.unmap();
-            fftImagBufferResultHeight.unmap();
-            // Access the mapped buffer here
-        } catch (error) {
-            //console.error("Failed to map buffer:", error);
-        } finally {
-            buffersMapped = false;
-        }
-
-        /*
-        fftRealBufferResultSlopeX.unmap();
-        fftImagBufferResultSlopeX.unmap();
-
-        fftRealBufferResultSlopeZ.unmap();
-        fftImagBufferResultSlopeZ.unmap();
-
-        fftRealBufferResultDispX.unmap();
-        fftImagBufferResultDispX.unmap();
-
-        fftRealBufferResultDispZ.unmap();
-        fftImagBufferResultDispZ.unmap();
-        */
-
-        //console.timeEnd("STEP 1.5: COMPUTING");
-
-    
-        // Calculating inverse FFT
-        //console.time("STEP 3: Performing IFFTs");
-    
-        // Equations 36, 37, 44 (represents the IFFT from the frequency domain back to the spatial domain), whole function is done by inverse transform
-        // results are written back to original arrays
-        // ifft usually divides computed values by number of points, but in our equations, that is not used, and inverseTransform() doesn't divide either
-        
-        // !! Inverse transform of heights done in compute shader !!
-        //inverseTransform(wave_height_field_real, wave_height_field_imag);
-        inverseTransform(slope_x_real, slope_x_imag);
-        inverseTransform(slope_z_real, slope_z_imag);
-        inverseTransform(displacement_x_real, displacement_x_imag);
-        inverseTransform(displacement_z_real, displacement_z_imag);
-    
-        //console.timeEnd("STEP 3: Performing IFFTs");
-    
-        // Creating normals and heights and setting the final normal and height fields
-    
-        //console.time("STEP 4: Creating normals and heights");
-    
-        for(var n = 0; n < N; n++){
-            for(var m = 0; m < M; m++){
-                var index = m * N + n;
-                var sign = 1;
-    
-                // flip the sign
-                if((m + n) % 2){
-                    sign = -1;
-                }
-    
-                // function to get the normal, which is perpendicular to the surface with slopes x and z
-                // sign, which is alternating between 1 and -1 means, that we have an alternating pattern throughout the grid - waves
-                var normal = vec3.fromValues(sign * slope_x_real[index], -1, sign * slope_z_real[index]);
-                vec3.normalize(normal, normal);
-                wave_normal_field_final[index] = normal;
-    
-                // Equation below 44 (x = lambda*D(x,t)), lambda is a scaling factor for importance of displacements
-                // original: x = (nLx/N, mLz/M), ampak ker gremo z indeksi n (m) od 0 do N (M) in ne od -N/2 do N/2 (M) kot v članku (indeksi ne morejo biti negativni), je treba tudi x popraviti tako kot vektor k, potem pa dodamo še displacement z lamdbdo x*labda*disp
-                var x_x = (n - N / 2) * Lx / N;
-                var x_z = (m - M / 2) * Lz / M;
-                var height = vec3.fromValues(x_x - sign * lambda * displacement_x_real[index], sign * wave_height_field_real[index], x_z - sign * lambda * displacement_z_real[index]);
-                wave_height_field_final[index] = height;
+            // flip the sign
+            if((m + n) % 2){
+                sign = -1;
             }
-        }
-    
-        //console.timeEnd("STEP 4: Creating normals and heights");
-    
-        render();
-    
-        time += 0.15;
-        animationFrameId = requestAnimationFrame(simulateOcean);
-    }
-}
 
+            // function to get the normal, which is perpendicular to the surface with slopes x and z
+            // sign, which is alternating between 1 and -1 means, that we have an alternating pattern throughout the grid - waves
+            var normal = vec3.fromValues(sign * slope_x_real[index], -1, sign * slope_z_real[index]);
+            vec3.normalize(normal, normal);
+            wave_normal_field_final[index] = normal;
+
+            // Equation below 44 (x = lambda*D(x,t)), lambda is a scaling factor for importance of displacements
+            // original: x = (nLx/N, mLz/M), ampak ker gremo z indeksi n (m) od 0 do N (M) in ne od -N/2 do N/2 (M) kot v članku (indeksi ne morejo biti negativni), je treba tudi x popraviti tako kot vektor k, potem pa dodamo še displacement z lamdbdo x*labda*disp
+            var x_x = (n - N / 2) * Lx / N;
+            var x_z = (m - M / 2) * Lz / M;
+            var height = vec3.fromValues(x_x - sign * lambda * displacement_x_real[index], sign * wave_height_field_real[index], x_z - sign * lambda * displacement_z_real[index]);
+            wave_height_field_final[index] = height;
+        }
+    }
+
+    //console.timeEnd("Creating normals and heights");
+
+    render();
+
+    time += 0.15;
+    animationFrameId = requestAnimationFrame(simulateOcean);
+}
 
 
 document.addEventListener("DOMContentLoaded", function() {
