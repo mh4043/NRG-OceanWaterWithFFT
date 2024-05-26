@@ -84,11 +84,11 @@ async function main(){
 
 function initializeParameters(){
     //N = 512;
-    //N = 64;
-    N = 256;
+    N = 128;
+    //N = 256;
     //M = 512;
-    //M = 64;
-    M = 256;
+    M = 128;
+    //M = 256;
     Lx = 1000;
     //Lx = 100
     Lz = 1000;
@@ -207,10 +207,10 @@ function setEventHandlers(){
                 vec3.cross(forward, camera.up, right);
                 vec3.normalize(right, right);
 
-                vec3.scaleAndAdd(camera.eye, right, -deltaX * camera.sensitivity * camera.moveSpeed, camera.eye);
-                vec3.scaleAndAdd(camera.eye, camera.up, deltaY * camera.sensitivity * camera.moveSpeed, camera.eye);
-                vec3.scaleAndAdd(camera.target, right, -deltaX * camera.sensitivity * camera.moveSpeed, camera.target);
-                vec3.scaleAndAdd(camera.target, camera.up, deltaY * camera.sensitivity * camera.moveSpeed, camera.target);
+                vec3.addScaled(camera.eye, right, -deltaX * camera.sensitivity * camera.moveSpeed, camera.eye);
+                vec3.addScaled(camera.eye, camera.up, deltaY * camera.sensitivity * camera.moveSpeed, camera.eye);
+                vec3.addScaled(camera.target, right, -deltaX * camera.sensitivity * camera.moveSpeed, camera.target);
+                vec3.addScaled(camera.target, camera.up, deltaY * camera.sensitivity * camera.moveSpeed, camera.target);
             } else {
                 // Orbital rotation
                 camera.theta += deltaX * camera.sensitivity;
@@ -328,8 +328,50 @@ async function startWebGPU(){
 
         @group(0) @binding(1) var<uniform> fsUniforms: FragmentShaderUniforms;
 
+        fn fresnelSchlick(cosTheta: f32, F0: vec3f) -> vec3f {
+            return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+        }
+
         @fragment fn fragmentShader(vertex: VertexShaderOutput) -> @location(0) vec4f{
-            return vec4f(0.0, 0.0, 1.0, 1.0);
+            //var a: vec4f = vec4f(fsUniforms.lightPosition, 1.0);
+            //return vec4f(0.0, 0.0, 1.0, 1.0);
+
+            var pos: vec3f = vertex.position.xyz;
+            var normal: vec3f = normalize(vertex.normal);
+            var viewDir: vec3f = normalize(fsUniforms.cameraPosition - pos);
+            var lightDir: vec3f = normalize(fsUniforms.lightPosition - pos);
+            var halfDir: vec3f = normalize(lightDir + viewDir);
+
+            var NdotL: f32 = max(dot(normal, lightDir), 0.0);
+            var NdotV: f32 = max(dot(normal, viewDir), 0.0);
+            var NdotH: f32 = max(dot(normal, halfDir), 0.0);
+            var VdotH: f32  = max(dot(viewDir, halfDir), 0.0);
+
+            var F0: vec3f = vec3f(0.04);
+            var F: vec3f = fresnelSchlick(max(dot(halfDir, viewDir), 0.0), F0);
+
+            var roughness: f32 = 0.2; // Adjust based on the roughness of the ocean surface
+            var D: f32 = pow(NdotH, (2.0 / (roughness * roughness)) - 2.0); // GGX Distribution
+
+            var kS: vec3f = F;
+            var kD: vec3f = vec3f(1.0) - kS;
+            kD *= 1.0 - 0.0; // Assuming no metalness in water
+
+            var diffuse: vec3f = kD * NdotL;
+            var specular: vec3f = kS * D * NdotL;
+
+            var reflectionDir: vec3f = reflect(-viewDir, normal);
+            var refractionDir: vec3f = refract(-viewDir, normal, 1.0 / 1.33); // Assuming water refraction index is 1.33
+
+            // Simple one-bounce tracing (reflection only)
+            var reflectedColor: vec3f = vec3f(0.0, 0, 0.5); // Compute based on environment or skybox
+            var refractedColor: vec3f = vec3f(0.0, 0.3, 0.7);; // Compute based on underwater color
+
+
+            // Combining reflection and refraction
+            var finalColor: vec3f = mix(reflectedColor, refractedColor, 0.5);
+
+            return vec4f(finalColor + diffuse + specular, 1.0);
         }
           
         `
@@ -378,7 +420,7 @@ async function startWebGPU(){
 
     // Preparing for uniforms
     const vertUniformBufferSize = 2 * 16 * 4; // 2 mat4s * 16 floats per mat * 4 bytes per float
-    const fragUniformBufferSize = 2 * 3 * 4;      // 2 vec3 * 3 floats per vec3 * 4 bytes per float (might need to add padding)
+    const fragUniformBufferSize = 2 * 3 * 4 + 8; // 2 vec3 * 3 floats per vec3 * 4 bytes per float (might need to add padding), +8 = padding (min size is 32bytes)
 
     const vsUniformBuffer = device.createBuffer({
         size: vertUniformBufferSize,
@@ -397,6 +439,7 @@ async function startWebGPU(){
     const lightPositionUniform = fsUniformValues.subarray(3, 6);
 
     // Create bind group -> what resources the shader will use (getBindGroupLayout(0) = @group(0), binding: 0 = @binding(0))
+    // Error because in fragment shader, FragmentShaderUniforms is currently not used, so it discards entry with fsUniformBuffer
     const bindGroup = device.createBindGroup({
         label: 'bind group for shader module',
         layout: pipeline.getBindGroupLayout(0),
