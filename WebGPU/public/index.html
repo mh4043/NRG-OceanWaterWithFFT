@@ -3,14 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>My Express App</title>
+  <title>Ocean waves with FFT</title>
   <link rel="stylesheet" href="style.css">
   <script type="module" src="main.js"></script>
+  <script src="Scripts/fft.js"></script>
 </head>
 <body>
 
-    <canvas></canvas>
-    <div id="circle"></div>
+  <h3>Ocean waves with FFT on GPU</h3>
+  <button class="btnStartSimulation" id="btnStartSimulation">Start simulation</button>
+
+  <p><b>Controls:</b> <u>rotate</u>: left mouse button, <u>move</u>: shift + left mouse button, <u>zoom</u>: scroll wheel</p>
+
+  <div class ="canvasDiv"><canvas id="canv" class="canv" width="600" height="600"></canvas></div>
   
 </body>
 </html>

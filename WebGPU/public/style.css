@@ -1,20 +1,12 @@
-html, body {
-  margin: 0;       /* remove the default margin          */
-  height: 100%;    /* make the html,body fill the page   */
+body{
+  background-color: wheat;
 }
-canvas {
-  display: block;  /* make the canvas act like a block   */
-  width: 100%;     /* make the canvas fill its container */
-  height: 100%;
-}
-:root {
-  --bg-color: #fff;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-color: #000;
-  }
-}
-canvas {
-  background-color: var(--bg-color);
+
+.canv{
+  display: block;
+  width: 600px;
+  height: 600px;
+  border: 2px solid black;
+  background-color: white;
+  margin: auto;
 }

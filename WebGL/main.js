@@ -624,6 +624,7 @@ function simulateOcean(now){
         }
     }
 
+    /*
     console.timeEnd("Creating normals and heights");
 
     // Calculating min and max heights
@@ -639,7 +640,7 @@ function simulateOcean(now){
                 heightMin = wave_height_field_final[index][1];
         }
     }
-
+    */
     time += 0.15;
 
     render();
